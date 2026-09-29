@@ -44,19 +44,72 @@ async function exportPage(mode) {
 
     if (!download?.ok) throw new Error(download?.error || 'خطا در ساخت فایل خروجی');
 
-    const id = await chrome.downloads.download({
-      url: download.dataUrl,
-      filename: download.filename,
-      saveAs: true
-    });
+    const id = await downloadWithFallback(download.dataUrl, download.filename, mode);
 
-    status(`دانلود شروع شد. شناسه: ${id}`);
+    status(download.fallback
+      ? `ZIP ساخته نشد؛ HTML جایگزین دانلود شد. شناسه: ${id}`
+      : `دانلود شروع شد. شناسه: ${id}`);
   } catch (e) {
     console.error(e);
     status(`خطا: ${e?.message || e}`);
   } finally {
     disabled(false);
   }
+}
+
+async function downloadWithFallback(dataUrl, filename, mode) {
+  const extension = mode === 'zip' ? 'zip' : 'html';
+  const primary = safeDownloadFilename(filename, extension);
+
+  try {
+    return await chrome.downloads.download({
+      url: dataUrl,
+      filename: primary,
+      saveAs: true
+    });
+  } catch (firstError) {
+    console.warn('Primary filename rejected. Retrying with fallback.', firstError);
+
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const fallback = `confluence-page-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.${extension}`;
+
+    try {
+      return await chrome.downloads.download({
+        url: dataUrl,
+        filename: fallback,
+        saveAs: true
+      });
+    } catch (secondError) {
+      console.error('Fallback filename also failed.', secondError);
+      throw new Error(
+        `ذخیره فایل ناموفق بود. نام اولیه: ${primary} | نام جایگزین: ${fallback} | ` +
+        `${secondError?.message || firstError?.message || 'Unknown error'}`
+      );
+    }
+  }
+}
+
+function safeDownloadFilename(name, extension) {
+  const fallback = `confluence-page-${Date.now()}`;
+  let value = String(name ?? '')
+    .normalize('NFKC')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/[\x00-\x1F\x80-\x9F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[. ]+$/g, '')
+    .replace(/^\.+$/, '');
+
+  const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
+  if (!value || value === '.' || value === '..' || reserved.test(value)) {
+    value = fallback;
+  }
+
+  value = value.slice(0, 120).replace(/[. ]+$/g, '') || fallback;
+  const ext = String(extension || '').replace(/^\./, '');
+  if (ext && !value.toLowerCase().endsWith(`.${ext.toLowerCase()}`)) value += `.${ext}`;
+  return value;
 }
 
 $('html').addEventListener('click', () => exportPage('html'));

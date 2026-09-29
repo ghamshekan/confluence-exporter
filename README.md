@@ -29,3 +29,7 @@ For production use, narrow both `host_permissions` and `content_scripts.matches`
 The extension exports the rendered DOM. It does not call Confluence REST API, so anything not rendered into the page is not automatically exported.
 
 Large pages/assets can hit browser extension message/download limits. For very large Space exports, a background service/backend exporter is a better architecture.
+
+## Resilience
+
+Version 1.0.1 hardens filename handling for Chrome/Windows reserved names, trailing dots/spaces, control characters, empty names and unexpected titles. Download is retried with a timestamped fallback name if Chrome rejects the primary filename. Individual asset failures are recorded in `manifest.json` and do not stop the export. If ZIP assembly itself fails, the extension falls back to downloading HTML so the export operation still produces a usable result.

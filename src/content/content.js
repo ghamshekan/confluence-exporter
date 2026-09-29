@@ -32,12 +32,23 @@
     try { return new URL(url, location.href).href; } catch { return null; }
   }
 
-  function safeName(name) {
-    return (name || 'asset')
-      .replace(/[\\/:*?"<>|]/g, '_')
-      .replace(/\s+/g, '_')
-      .replace(/^\.+/, '')
-      .slice(0, 120) || 'asset';
+  function safeName(name, fallback = 'asset') {
+    try {
+      let value = String(name ?? '')
+        .normalize('NFKC')
+        .replace(/[\\/:*?"<>|]/g, '_')
+        .replace(/[\x00-\x1F\x80-\x9F]/g, '_')
+        .replace(/\s+/g, '_')
+        .trim()
+        .replace(/[. ]+$/g, '')
+        .replace(/^\.+$/, '');
+
+      const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
+      if (!value || value === '.' || value === '..' || reserved.test(value)) value = fallback;
+      return value.slice(0, 100).replace(/[. ]+$/g, '') || fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   function contentRoot() {
@@ -82,23 +93,32 @@
     let index = 1;
 
     root.querySelectorAll('img').forEach(img => {
-      const src = img.getAttribute('src') || img.currentSrc;
-      const url = absolute(src);
-      if (!url || /^data:|^blob:/i.test(url)) return;
+      try {
+        const src = img.getAttribute('src') || img.currentSrc;
+        const url = absolute(src);
+        if (!url || /^data:|^blob:/i.test(url)) return;
 
-      let path = seen.get(url);
-      if (!path) {
-        const u = new URL(url);
-        let filename = safeName(decodeURIComponent(u.pathname.split('/').pop() || `image-${index}`));
-        if (!/\.[a-z0-9]{2,8}$/i.test(filename)) filename += '.bin';
-        path = `assets/images/${String(index++).padStart(3, '0')}-${filename}`;
-        seen.set(url, path);
-        assets.push({ url, path, kind: 'image' });
+        let path = seen.get(url);
+        if (!path) {
+          let filename = `image-${index}`;
+          try {
+            const u = new URL(url);
+            filename = safeName(decodeURIComponent(u.pathname.split('/').pop() || filename), filename);
+          } catch {
+            filename = safeName(filename, `image-${index}`);
+          }
+          if (!/\.[a-z0-9]{2,8}$/i.test(filename)) filename += '.bin';
+          path = `assets/images/${String(index++).padStart(3, '0')}-${filename}`;
+          seen.set(url, path);
+          assets.push({ url, path, kind: 'image' });
+        }
+        img.setAttribute('src', `__CONFLUENCE_ASSET__${encodeURIComponent(url)}__`);
+        img.removeAttribute('srcset');
+        img.removeAttribute('loading');
+        img.removeAttribute('fetchpriority');
+      } catch (e) {
+        console.warn('Confluence Exporter: image processing skipped.', e);
       }
-      img.setAttribute('src', `__CONFLUENCE_ASSET__${encodeURIComponent(url)}__`);
-      img.removeAttribute('srcset');
-      img.removeAttribute('loading');
-      img.removeAttribute('fetchpriority');
     });
 
     return assets;
@@ -112,14 +132,23 @@
     let index = 1;
 
     document.querySelectorAll('link[rel="stylesheet"][href]').forEach(link => {
-      const href = absolute(link.getAttribute('href'));
-      if (!href || seen.has(href)) return;
-      seen.add(href);
-      const u = new URL(href);
-      let filename = safeName(decodeURIComponent(u.pathname.split('/').pop() || `style-${index}`));
-      if (!/\.css$/i.test(filename)) filename += '.css';
-      const path = `assets/css/${String(index++).padStart(2, '0')}-${filename}`;
-      assets.push({ url: href, path, kind: 'css' });
+      try {
+        const href = absolute(link.getAttribute('href'));
+        if (!href || seen.has(href)) return;
+        seen.add(href);
+        let filename = `style-${index}`;
+        try {
+          const u = new URL(href);
+          filename = safeName(decodeURIComponent(u.pathname.split('/').pop() || filename), filename);
+        } catch {
+          filename = safeName(filename, `style-${index}`);
+        }
+        if (!/\.css$/i.test(filename)) filename += '.css';
+        const path = `assets/css/${String(index++).padStart(2, '0')}-${filename}`;
+        assets.push({ url: href, path, kind: 'css' });
+      } catch (e) {
+        console.warn('Confluence Exporter: stylesheet processing skipped.', e);
+      }
     });
 
     return assets;
@@ -210,12 +239,27 @@ ${root.innerHTML}
     replaceCanvases(original, root);
 
     const assets = [];
-    if (options.images !== false) assets.push(...collectImages(root));
+    try {
+      if (options.images !== false) assets.push(...collectImages(root));
+    } catch (e) {
+      console.warn('Confluence Exporter: image collection failed; continuing.', e);
+    }
 
-    const cssAssets = collectStylesheets(root, options.css === true);
-    assets.push(...cssAssets);
+    let cssAssets = [];
+    try {
+      cssAssets = collectStylesheets(root, options.css === true);
+      assets.push(...cssAssets);
+    } catch (e) {
+      console.warn('Confluence Exporter: CSS collection failed; continuing.', e);
+    }
 
-    const html = htmlDocument(title(), root, options.css === true, cssAssets);
+    let html;
+    try {
+      html = htmlDocument(title(), root, options.css === true, cssAssets);
+    } catch (e) {
+      console.warn('Confluence Exporter: HTML generation failed; using minimal HTML.', e);
+      html = `<!doctype html><html><head><meta charset="UTF-8"><title>${escapeHtml(title())}</title></head><body><main>${escapeHtml(root?.innerText || '')}</main></body></html>`;
+    }
 
     return {
       title: title(),

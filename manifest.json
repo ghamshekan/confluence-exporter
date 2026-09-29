@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Confluence HTML Exporter",
-  "version": "1.0.0",
-  "description": "Export the rendered Confluence page as standalone HTML or ZIP with local images and SVG diagrams.",
-  "permissions": ["activeTab", "downloads", "scripting"],
-  "host_permissions": ["https://*/*"],
+  "version": "1.0.1",
+  "description": "Export rendered Confluence pages with resilient filename handling, local images and SVG diagrams.",
+  "permissions": [
+    "activeTab",
+    "downloads",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://*/*"
+  ],
   "action": {
     "default_title": "Confluence HTML Exporter",
     "default_popup": "src/popup/popup.html"
@@ -14,8 +20,12 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*/*"],
-      "js": ["src/content/content.js"],
+      "matches": [
+        "https://*/*"
+      ],
+      "js": [
+        "src/content/content.js"
+      ],
       "run_at": "document_idle"
     }
   ]

@@ -15,26 +15,30 @@ async function buildDownload(message) {
   if (!payload?.html) throw new Error('Export payload is missing HTML.');
 
   const zip = new ZipStore();
-  const html = mode === 'html' ? payload.html : rewritePlaceholders(payload.html, payload.assets || []);
 
   if (mode === 'html') {
     const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
-    return { ok: true, filename: `${safeFilename(payload.title)}.html`, dataUrl };
+    return { ok: true, filename: safeFilename(payload.title, 'html'), dataUrl };
   }
 
-  zip.addText('index.html', html);
   const failures = [];
 
   for (const asset of payload.assets || []) {
     try {
+      if (!asset?.url) throw new Error('Asset URL is missing.');
       const response = await fetch(asset.url, { credentials: 'include', cache: 'force-cache' });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const bytes = new Uint8Array(await response.arrayBuffer());
-      zip.addBytes(asset.path, bytes);
+      const zipPath = safeZipPath(asset.path, asset.kind);
+      zip.addBytes(zipPath, bytes);
+      asset.exportedPath = zipPath;
     } catch (e) {
-      failures.push({ url: asset.url, error: e?.message || String(e) });
+      failures.push({ url: asset?.url || null, path: asset?.path || null, error: e?.message || String(e) });
     }
   }
+
+  const html = rewritePlaceholders(payload.html, payload.assets || []);
+  zip.addText('index.html', html);
 
   const manifest = {
     exporter: 'Confluence HTML Exporter',
@@ -46,22 +50,104 @@ async function buildDownload(message) {
   };
   zip.addText('manifest.json', JSON.stringify(manifest, null, 2));
 
-  const blob = zip.finish();
-  const dataUrl = await blobToDataUrl(blob);
-  return { ok: true, filename: `${safeFilename(payload.title)}.zip`, dataUrl, failures };
+  let blob;
+  try {
+    blob = zip.finish();
+  } catch (e) {
+    failures.push({ url: null, path: null, error: `ZIP generation failed: ${e?.message || String(e)}` });
+    // Last-resort export: always provide the HTML even if ZIP assembly fails.
+    const fallbackHtml = payload.html || '<!doctype html><html><body><p>Export failed.</p></body></html>';
+    const dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(fallbackHtml);
+    return {
+      ok: true,
+      filename: safeFilename(payload.title, 'html'),
+      dataUrl,
+      fallback: true,
+      failures
+    };
+  }
+
+  let dataUrl;
+  try {
+    dataUrl = await blobToDataUrl(blob);
+  } catch (e) {
+    failures.push({ url: null, path: null, error: `ZIP data conversion failed: ${e?.message || String(e)}` });
+    const fallbackHtml = payload.html || '<!doctype html><html><body><p>Export failed.</p></body></html>';
+    dataUrl = 'data:text/html;charset=utf-8,' + encodeURIComponent(fallbackHtml);
+    return {
+      ok: true,
+      filename: safeFilename(payload.title, 'html'),
+      dataUrl,
+      fallback: true,
+      failures
+    };
+  }
+
+  return { ok: true, filename: safeFilename(payload.title, 'zip'), dataUrl, failures };
 }
 
 function rewritePlaceholders(html, assets) {
   let result = html;
   for (const asset of assets) {
     const marker = `__CONFLUENCE_ASSET__${encodeURIComponent(asset.url)}__`;
-    result = result.split(marker).join(`./${asset.path}`);
+    result = result.split(marker).join(`./${asset.exportedPath || safeZipPath(asset.path, asset.kind)}`);
   }
   return result;
 }
 
-function safeFilename(name) {
-  return (name || 'confluence-page').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 120) || 'confluence-page';
+function safeZipPath(path, kind) {
+  const fallbackDir = kind === 'css' ? 'assets/css' : 'assets/images';
+  const fallbackExt = kind === 'css' ? '.css' : (kind === 'image' ? '.bin' : '.bin');
+  try {
+    const raw = String(path ?? '');
+    const parts = raw.split('/').filter(Boolean);
+    let file = parts.pop() || `asset-${timestampForFilename()}${fallbackExt}`;
+    file = safeFilename(file);
+    // Avoid path traversal and directory names from external data.
+    const dir = kind === 'css' ? 'assets/css' : (parts[0] === 'assets' && parts[1] === 'images' ? 'assets/images' : fallbackDir);
+    return `${dir}/${file}`;
+  } catch {
+    return `${fallbackDir}/asset-${timestampForFilename()}${fallbackExt}`;
+  }
+}
+
+function safeFilename(name, extension = '') {
+  const fallback = `confluence-page-${timestampForFilename()}`;
+  let value = String(name ?? '')
+    .normalize('NFKC')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/[\x00-\x1F\x80-\x9F]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Windows/Chrome rejects trailing dots/spaces and some DOS device names.
+  value = value.replace(/[. ]+$/g, '');
+  value = value.replace(/^\.+$/, '');
+
+  const reserved = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
+  if (!value || value === '.' || value === '..' || reserved.test(value)) {
+    value = fallback;
+  }
+
+  value = value.slice(0, 120).replace(/[. ]+$/g, '') || fallback;
+
+  const ext = extension ? (String(extension).startsWith('.') ? String(extension) : `.${extension}`) : '';
+  if (ext && !value.toLowerCase().endsWith(ext.toLowerCase())) value += ext;
+  return value;
+}
+
+function timestampForFilename() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return [
+    d.getFullYear(),
+    pad(d.getMonth() + 1),
+    pad(d.getDate())
+  ].join('') + '-' + [
+    pad(d.getHours()),
+    pad(d.getMinutes()),
+    pad(d.getSeconds())
+  ].join('');
 }
 
 async function blobToDataUrl(blob) {
