@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Confluence Exporter</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Confluence Exporter</h1>
+    <div id="page" class="page">در حال شناسایی صفحه...</div>
+
+    <section>
+      <label><input id="images" type="checkbox" checked> تصاویر</label>
+      <label><input id="css" type="checkbox"> فایل‌های CSS</label>
+      <label><input id="clean" type="checkbox" checked> حذف رابط کاربری Confluence</label>
+    </section>
+
+    <div class="actions">
+      <button id="html">خروجی HTML</button>
+      <button id="zip" class="primary">خروجی ZIP</button>
+    </div>
+
+    <div id="status" class="status">آماده</div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
